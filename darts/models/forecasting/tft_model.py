@@ -553,7 +553,7 @@ class _TFTModule(PLMixedCovariatesModule):
         }
         embeddings_varying_encoder, encoder_sparse_weights = self.encoder_vsn(
             x=embeddings_varying_encoder,
-            context=static_context_expanded[:, :encoder_length],
+            context=static_context_expanded[:, :encoder_length].float(),
         )
 
         embeddings_varying_decoder = {

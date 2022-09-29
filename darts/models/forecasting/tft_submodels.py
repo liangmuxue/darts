@@ -482,7 +482,7 @@ class _VariableSelectionNetwork(nn.Module):
 
             # calculate variable weights
             flat_embedding = torch.cat(weight_inputs, dim=-1)
-            sparse_weights = self.flattened_grn(flat_embedding, context)
+            sparse_weights = self.flattened_grn(flat_embedding, context.double())
             sparse_weights = self.softmax(sparse_weights).unsqueeze(-2)
 
             outputs = var_outputs * sparse_weights
