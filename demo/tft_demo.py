@@ -29,7 +29,7 @@ label_q_inner = f"{int(low_q * 100)}-{int(high_q * 100)}th percentiles"
 
 training_cutoff = 1200
 transformer = Scaler()
-forecast_horizon = 12
+forecast_horizon = 1
 input_chunk_length = 20
 
 def create_model():
@@ -72,6 +72,10 @@ def create_model():
         ),  # QuantileRegression is set per default
         # loss_fn=MSELoss(),
         random_state=42,
+        # model_name="tft",
+        log_tensorboard=True,
+        save_checkpoints=True,
+        work_dir="demo/darts_log"
     )
     return my_model
 
