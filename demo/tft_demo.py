@@ -3,7 +3,6 @@ from examples.utils import fix_pythonpath_if_working_locally
 import numpy as np
 import pandas as pd
 from tqdm import tqdm_notebook as tqdm
-
 import matplotlib.pyplot as plt
 
 from darts import TimeSeries, concatenate
@@ -16,10 +15,14 @@ from darts.utils.timeseries_generation import datetime_attribute_timeseries
 from darts.utils.likelihood_models import QuantileRegression
 
 import warnings
-
+from darts.utils import data
+# from akshare.bond.bond_bank import df
 warnings.filterwarnings("ignore")
 import logging
 logging.disable(logging.CRITICAL)
+
+from demo.cus_utils.tensor_viz import TensorViz
+
 
 figsize = (9, 6)
 num_samples = 200
@@ -27,10 +30,16 @@ lowest_q, low_q, high_q, highest_q = 0.01, 0.1, 0.9, 0.99
 label_q_outer = f"{int(lowest_q * 100)}-{int(highest_q * 100)}th percentiles"
 label_q_inner = f"{int(low_q * 100)}-{int(high_q * 100)}th percentiles"
 
-training_cutoff = 1200
+training_cutoff = 900
 transformer = Scaler()
 forecast_horizon = 1
 input_chunk_length = 20
+emb_size = 955
+value_cols = ['dayofweek','STD5', 'VSTD5', 'label','ori_label']
+past_columns = ['STD5', 'VSTD5','ori_label']
+
+viz_target = TensorViz(env="data_target") 
+viz_input = TensorViz(env="data_input") 
 
 def create_model():
     # default quantiles for QuantileRegression
@@ -54,7 +63,7 @@ def create_model():
         0.99,
     ]
     # 设置"day of week" 为动态离散变量
-    categorical_embedding_sizes = {"dayofweek": 5}
+    categorical_embedding_sizes = {"dayofweek": 5,"instrument": emb_size}
     my_model = TFTModel(
         input_chunk_length=input_chunk_length,
         output_chunk_length=forecast_horizon,
@@ -136,16 +145,21 @@ def build_past_covariates(series,past_columns):
     return past_covariates  
 
 def data_prepare():
-    file_path = "/home/qdata/project/qlib/custom/data/aug/test_100_timeidx.pkl"
+    file_path = "/home/qdata/project/qlib/custom/data/aug/test_all_timeidx.pkl"
     df = pd.read_pickle(file_path)
+    # 清洗数据
+    df = data_clean(df)
+    vis_target_ser(df)
+    # 使用移动平均值作为目标数值
+    df['ori_label'] = df['ori_label'].rolling(window=5,min_periods=1).mean()
+    vis_target_ser(df,label="target_ser_rolling")
     # group需要转换为数值型
     df['instrument'] = df['instrument'].apply(pd.to_numeric,errors='coerce')
     
-    # dataframe转timeseries
-    value_cols = ['dayofweek','CORD5', 'VSTD5', 'WVMA5', 'label','ori_label']
+    # dataframe转timeseries,使用group模式，每个股票生成一个序列,
     series = TimeSeries.from_group_dataframe(df,
                                             time_col="time_idx",
-                                             group_cols="instrument",
+                                             group_cols="instrument",# group_cols会自动成为静态协变量
                                              freq='D',
                                              fill_missing_dates=True,
                                              # static_cols="instrument",
@@ -162,24 +176,28 @@ def data_prepare():
         try:
             train,val = s.split_after(training_cutoff)
         except Exception as e:
-            # print("err",e)
+            print("err",e)
             continue
         # Normalize the time series (note: we avoid fitting the transformer on the validation set)
         train_transformed = transformer.fit_transform(train)
         val_transformed = transformer.transform(val)
+        # 剔除训练接transform后的极值--不需要
+        # val_transformed = val_data_clean(val_transformed,columns=past_columns)
+        # 保留原序列用于回测
         s_transformed = transformer.transform(s)
+        
         # 生成未来协变量
         future = build_future_covariates(train_transformed)     
         future_covariates.append(future)  
         val_future = build_future_covariates(val_transformed)     
         val_future_covariates.append(val_future)          
         # 生成过去协变量
-        past = build_past_covariates(train_transformed,past_columns=['CORD5', 'VSTD5', 'WVMA5']) 
+        past = build_past_covariates(train_transformed,past_columns=past_columns) 
         past_covariates.append(past)
-        val_past = build_past_covariates(val_transformed,past_columns=['CORD5', 'VSTD5', 'WVMA5']) 
+        val_past = build_past_covariates(val_transformed,past_columns=past_columns) 
         val_past_covariates.append(val_past)       
         # 删除其他的目标数据，target只保留一个数据 
-        ignore_cols = ['dayofweek','CORD5', 'VSTD5', 'WVMA5', 'label']
+        ignore_cols = ['dayofweek','STD5', 'VSTD5', 'label']
         train_transformed = train_transformed.drop_columns(ignore_cols)
         val_transformed = val_transformed.drop_columns(ignore_cols)
         s_transformed = s_transformed.drop_columns(ignore_cols)
@@ -187,14 +205,74 @@ def data_prepare():
         vals_transformed.append(val_transformed)
         series_transformed.append(s_transformed)
         
+    # 可视化部分   
+    vis_target(trains_transformed,type="train")
+    vis_input(past_covariates,type="train",columns=past_columns)
+    vis_target(vals_transformed,type="val")
+    vis_input(val_past_covariates,type="val",columns=past_columns)    
     return trains_transformed,vals_transformed,series_transformed,past_covariates,future_covariates,val_past_covariates,val_future_covariates
-    
+ 
+def data_clean(data):
+    # 清除序列长度不够的股票,需要多余训练数据的一定比例
+    thr_number = int(training_cutoff * 1.2)
+    gcnt = data.groupby("instrument").count()
+    index = gcnt[gcnt['time_idx']>thr_number].index
+    data = data[data['instrument'].isin(index)]
+    return data
 
+def val_data_clean(data_transformed,columns=[]):
+    # 清理验证集数据，剔除极值
+    df = data_transformed.pd_dataframe()
+    for column in columns:
+        # 只保留合适的数值，范围为-3到3
+        df = df[(df[column]<3)  & (df[column]>-3)]
+    df["time_idx"] = df.index
+    
+    data_transformed = TimeSeries.from_dataframe(df,time_col="time_idx",value_cols=value_cols,static_covariates=df["instrument"])
+    return data_transformed
+    
+def vis_target(data_sers,type="train"):
+    """查看目标数据"""
+    data = None
+    for item in data_sers:
+        values = item.all_values().reshape(-1)
+        if data is None:
+            data = values
+        else:
+            data = np.concatenate((data,values),axis=0) 
+    label = "target_{}".format(type)
+    viz_target.viz_data_hist(data,numbins=20,win=label,title=label)
+    
+def vis_target_ser(df,label="target_ser"):
+    """查看目标序列数据"""
+    data = df[df['instrument']<9]
+    data = data.pivot(index="instrument",columns="time_idx",values="ori_label")
+    data = data.values.transpose(1,0)
+    viz_target.viz_matrix_var(data,win=label,title=label)
+    
+def vis_input(data_sers,type="train",columns=[]):
+    """查看输入数据"""
+    df_list = []
+    for item in data_sers:
+        df_list.append(item.pd_dataframe())
+    for index,column in enumerate(columns):
+        data = None
+        for item in df_list:
+            values = item[column].values.reshape(-1)
+            if data is None:
+                data = values
+            else:
+                data = np.concatenate((data,values),axis=0) 
+        label = "input_{}_{}".format(type,column)
+        viz_input.viz_data_hist(data,numbins=20,win=label,title=label)
+      
 def process():
     # 取得训练数据及测试数据
     train_transformed,val_transformed,series_transformed,past_covariates,future_covariates,val_past_covariates,val_future_covariates = data_prepare()
+    # 过滤空值
     for item in train_transformed:
         find_nan(item)
+    
     my_model = create_model()
     my_model.fit(train_transformed, past_covariates=past_covariates, future_covariates=future_covariates,
                  val_series=val_transformed,val_past_covariates=val_past_covariates,val_future_covariates=val_future_covariates,
