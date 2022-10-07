@@ -32,8 +32,8 @@ label_q_inner = f"{int(low_q * 100)}-{int(high_q * 100)}th percentiles"
 
 training_cutoff = 900
 transformer = Scaler()
-forecast_horizon = 1
-input_chunk_length = 20
+forecast_horizon = 5
+input_chunk_length = 15
 emb_size = 955
 value_cols = ['dayofweek','STD5', 'VSTD5', 'label','ori_label']
 past_columns = ['STD5', 'VSTD5','ori_label']
@@ -71,7 +71,7 @@ def create_model():
         lstm_layers=1,
         num_attention_heads=4,
         dropout=0.1,
-        batch_size=1024,
+        batch_size=2048,
         n_epochs=300,
         add_relative_index=False,
         add_encoders=None,
@@ -84,8 +84,11 @@ def create_model():
         # model_name="tft",
         log_tensorboard=True,
         save_checkpoints=True,
-        work_dir="demo/darts_log"
+        work_dir="demo/darts_log",
+        pl_trainer_kwargs={"accelerator": "gpu", "devices": [0]}
     )
+    # model_name = "2022-10-05_21.20.35.159335_torch_model_run_13604"
+    # my_model = TFTModel.load_from_checkpoint(model_name,work_dir="demo/darts_log")
     return my_model
 
 def eval_model(model, n, actual_series, val_series):
