@@ -2,14 +2,11 @@ from examples.utils import fix_pythonpath_if_working_locally
 
 import numpy as np
 import pandas as pd
-import torch
 from tqdm import tqdm_notebook as tqdm
 import matplotlib.pyplot as plt
-from torch.optim.lr_scheduler import CosineAnnealingLR,CosineAnnealingWarmRestarts,StepLR
 
 from darts import TimeSeries, concatenate
 from darts.dataprocessing.transformers import Scaler
-from darts.models import TFTModel
 from darts.metrics import mape
 from darts.utils.statistics import check_seasonality, plot_acf
 from darts.datasets import AirPassengersDataset, IceCreamHeaterDataset
@@ -18,6 +15,7 @@ from darts.utils.likelihood_models import QuantileRegression
 
 import warnings
 from darts.utils import data
+from darts.models.forecasting.block_rnn_model import BlockRNNModel
 # from akshare.bond.bond_bank import df
 warnings.filterwarnings("ignore")
 import logging
@@ -34,70 +32,31 @@ label_q_inner = f"{int(low_q * 100)}-{int(high_q * 100)}th percentiles"
 
 training_cutoff = 900
 transformer = Scaler()
-forecast_horizon = 1
+forecast_horizon = 5
 input_chunk_length = 15
 emb_size = 955
 value_cols = ['dayofweek','STD5', 'VSTD5', 'label','ori_label']
-past_columns = ['STD5', 'VSTD5','label']
+past_columns = ['STD5', 'VSTD5','ori_label']
 
 viz_target = TensorViz(env="data_target") 
 viz_input = TensorViz(env="data_input") 
 
 def create_model():
-    # default quantiles for QuantileRegression
-    quantiles = [
-        0.01,
-        0.05,
-        0.1,
-        0.15,
-        0.2,
-        0.25,
-        0.3,
-        0.4,
-        0.5,
-        0.6,
-        0.7,
-        0.75,
-        0.8,
-        0.85,
-        0.9,
-        0.95,
-        0.99,
-    ]
-    # 设置"day of week" 为动态离散变量
-    categorical_embedding_sizes = {"dayofweek": 5,"instrument": emb_size}
-    # 定义优化器
-    optimizer_cls = torch.optim.Adam
-    scheduler = CosineAnnealingLR
-    scheduler_config = {
-        "T_max": 5, 
-        "eta_min": 0,
-    }    
-    my_model = TFTModel(
+    my_model = BlockRNNModel(
+        model="LSTM",
         input_chunk_length=input_chunk_length,
         output_chunk_length=forecast_horizon,
-        hidden_size=64,
-        lstm_layers=1,
-        num_attention_heads=4,
-        dropout=0.1,
+        hidden_dim=20,
+        dropout=0,
         batch_size=4096,
         n_epochs=300,
-        add_relative_index=False,
-        add_encoders=None,
-        categorical_embedding_sizes=categorical_embedding_sizes,
-        likelihood=QuantileRegression(
-            quantiles=quantiles
-        ),  # QuantileRegression is set per default
+
         # loss_fn=MSELoss(),
         random_state=42,
-        # model_name="tft",
+        model_name="lstm_2",
         log_tensorboard=True,
         save_checkpoints=True,
         work_dir="demo/darts_log",
-        lr_scheduler_cls=scheduler,
-        lr_scheduler_kwargs=scheduler_config,
-        optimizer_cls=optimizer_cls,
-        optimizer_kwargs={"lr": 1e-2},
         pl_trainer_kwargs={"accelerator": "gpu", "devices": [0]}
     )
     # model_name = "2022-10-05_21.20.35.159335_torch_model_run_13604"
@@ -166,10 +125,8 @@ def data_prepare():
     # 清洗数据
     df = data_clean(df)
     vis_target_ser(df)
-    df['label']  = df['ori_label']
-    # 使用后5天的移动平均值作为目标数值
-    df['ori_label']  = df.groupby('instrument')['ori_label'].shift(-5).rolling(window=5,min_periods=1).mean()
-    df = df.dropna()
+    # 使用移动平均值作为目标数值
+    # df['ori_label'] = df['ori_label'].rolling(window=5,min_periods=1).mean()
     vis_target_ser(df,label="target_ser_rolling")
     # group需要转换为数值型
     df['instrument'] = df['instrument'].apply(pd.to_numeric,errors='coerce')
@@ -224,7 +181,7 @@ def data_prepare():
         series_transformed.append(s_transformed)
         
     # 可视化部分   
-    vis_target(series_transformed,type="all")
+    vis_target(series_transformed,type="ser")
     vis_target(trains_transformed,type="train")
     vis_input(past_covariates,type="train",columns=past_columns)
     vis_target(vals_transformed,type="val")
@@ -269,7 +226,6 @@ def vis_target(data_sers,type="train"):
 def vis_target_ser(df,label="target_ser"):
     """查看目标序列数据"""
     data = df[df['instrument']<9]
-    # 根据股票代码，把dataframe维转2维矩阵
     data = data.pivot(index="instrument",columns="time_idx",values="ori_label")
     data = data.values.transpose(1,0)
     viz_target.viz_matrix_var(data,win=label,title=label)
@@ -298,8 +254,8 @@ def process():
         find_nan(item)
     
     my_model = create_model()
-    my_model.fit(train_transformed, past_covariates=past_covariates, future_covariates=future_covariates,
-                 val_series=val_transformed,val_past_covariates=val_past_covariates,val_future_covariates=val_future_covariates,
+    my_model.fit(train_transformed, past_covariates=past_covariates,
+                 val_series=val_transformed,val_past_covariates=val_past_covariates,
                  verbose=True)
     eval_model(my_model, input_chunk_length, series_transformed, val_transformed)
     
