@@ -630,7 +630,7 @@ class GenericShiftedDataset(TrainingDataset):
             covariate_series=covariate_series,
             covariate_type=main_covariate_type,
         )
-
+        # print("idx:{},past_start:{},past_end:{}".format(idx,past_start,past_end))
         # extract sample target
         future_target = target_vals[future_start:future_end]
         past_target = target_vals[past_start:past_end]

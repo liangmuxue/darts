@@ -203,7 +203,7 @@ my_model = TFTModel(
 # In[ ]:
 
 
-my_model.fit(train_transformed, future_covariates=covariates_transformed, verbose=True)
+my_model.fit(train_transformed, future_covariates=covariates_transformed, verbose=True,epochs=-1)
 
 
 # ### Look at predictions on the validation set

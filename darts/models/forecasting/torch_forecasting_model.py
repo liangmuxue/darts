@@ -956,9 +956,10 @@ class TorchForecastingModel(GlobalForecastingModel, ABC):
                 "best=False)`. Finally, train the model with `model.fit(..., epochs=new_epochs)` where "
                 "`new_epochs` is the sum of (epochs already trained + some additional epochs)."
             )
-
-        # Train model
-        self._train(train_loader, val_loader)
+        
+        if epochs > 0:
+            # Train model
+            self._train(train_loader, val_loader)
         return self
 
     def _train(
