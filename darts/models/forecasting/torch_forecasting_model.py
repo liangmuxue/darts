@@ -957,7 +957,7 @@ class TorchForecastingModel(GlobalForecastingModel, ABC):
                 "`new_epochs` is the sum of (epochs already trained + some additional epochs)."
             )
         
-        if epochs > 0:
+        if self.n_epochs > 0:
             # Train model
             self._train(train_loader, val_loader)
         return self

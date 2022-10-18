@@ -24,7 +24,7 @@ import logging
 logging.disable(logging.CRITICAL)
 
 from demo.cus_utils.tensor_viz import TensorViz
-
+from demo.cus_utils.data_filter import DataFilter
 
 figsize = (9, 6)
 num_samples = 200
@@ -44,7 +44,7 @@ viz_target = TensorViz(env="data_target")
 viz_input = TensorViz(env="data_input") 
 work_dir = "demo/darts_log"
 
-def create_model(model_name=None):
+def create_model(model_name=None,epochs=300):
     # default quantiles for QuantileRegression
     quantiles = [
         0.01,
@@ -83,7 +83,7 @@ def create_model(model_name=None):
             num_attention_heads=4,
             dropout=0.1,
             batch_size=4096,
-            n_epochs=300,
+            n_epochs=epochs,
             add_relative_index=False,
             add_encoders=None,
             categorical_embedding_sizes=categorical_embedding_sizes,
@@ -383,7 +383,7 @@ def test():
     converted_series = converted_series[pd.Timestamp("20100101") :]    
 
 def process_val():   
-    my_model = create_model()
+    my_model = create_model(epochs=-1)
     train_transformed,val_transformed,series_transformed,past_covariates,future_covariates,val_past_covariates,val_future_covariates = data_prepare(cut_val=True)
     my_model.fit(train_transformed, past_covariates=past_covariates, future_covariates=future_covariates,
                  val_series=val_transformed,val_past_covariates=val_past_covariates,val_future_covariates=val_future_covariates,
@@ -398,8 +398,64 @@ def process_val():
         ]
         actual_series_list.append(actual_series)
     eval_model(my_model, forecast_horizon, actual_series_list, val_transformed,past_covariates=val_past_covariates,future_covariates=val_future_covariates)
-    
+
+def filter_data():
+    data_filter = DataFilter()
+    file_path = "/home/qdata/project/qlib/custom/data/aug/test_all_timeidx.pkl"
+    save_file_path = "/home/qdata/project/qlib/custom/data/aug/test_low.npy"
+    df = pd.read_pickle(file_path)
+    # 清洗数据
+    df = data_clean(df)   
+    # 使用后5天的移动平均值作为目标数值
+    df['ori_label']  = df.groupby('instrument')['ori_label'].shift(-5).rolling(window=5,min_periods=1).mean()
+    df = df.dropna().reset_index() 
+    wave_data = data_filter.filter_wave_data(df, target_column="ori_label", group_column="instrument",wave_threhold_type="less",wave_threhold=5,over_time=2)
+    print("wave_data",wave_data.shape)
+    np.save(save_file_path,wave_data)
+ 
+def filter_data_nor():
+    file_path = "/home/qdata/project/qlib/custom/data/aug/test_all_timeidx.pkl"
+    save_file_path = "/home/qdata/project/qlib/custom/data/aug/test_nor.npy"
+    df = pd.read_pickle(file_path)
+    # 清洗数据
+    df = data_clean(df)   
+    # 使用后5天的移动平均值作为目标数值
+    df['ori_label']  = df.groupby('instrument')['ori_label'].shift(-5).rolling(window=5,min_periods=1).mean()
+    df = df.dropna().reset_index() 
+    data_filter = DataFilter()
+    wave_data = data_filter.filter_wave_data(df.loc[:150000], target_column="ori_label", group_column="instrument",wave_threhold_type="more",wave_threhold=0,over_time=2)
+    print("wave_data",wave_data.shape)
+    np.save(save_file_path,wave_data[:6000])    
+       
+def aug_data_view():   
+    viz_input = TensorViz(env="data_hist") 
+    pd_file_path = "/home/qdata/project/qlib/custom/data/aug/test_all_timeidx.pkl"
+    df = pd.read_pickle(pd_file_path)
+    print("columns:",df.columns)
+    value_combine = None
+    for type in ["high","low","nor"]:
+        np_file_path = "/home/qdata/project/qlib/custom/data/aug/test_{}.npy".format(type)
+        # 忽略第一列index列
+        data = np.load(np_file_path)[:,:,1:]
+        print("data {} shape:{}".format(type,data.shape))
+        # 最后一列为观察数值,并且时间轴只使用后5个数据
+        value = data[:,25:,-1]
+        if value_combine is None:
+            value_combine = value
+        else:
+            value_combine = np.concatenate((value_combine,value))
+        v_title = "aug_data_{}".format(type)    
+        viz_input.viz_data_hist(value.reshape(-1),numbins=10,win=v_title,title=v_title)  
+        # for i in range(3):
+        #     title = "line_{}_{}".format(type,i)
+        #     viz_input.viz_matrix_var(data[i],win=title,title=title)
+    viz_input.viz_data_hist(value_combine.reshape(-1),numbins=10,win="aug_data_combine",title="aug_data_combine") 
+    print('viz ok')
+            
 if __name__ == "__main__":
     # process()
     process_val()
+    # filter_data()
+    # filter_data_nor()
+    # aug_data_view()
     # test()
