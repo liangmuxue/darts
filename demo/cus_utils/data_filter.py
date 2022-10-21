@@ -63,6 +63,7 @@ class DataFilter():
                     target_data_array = np.concatenate((target_data_array,item),axis=0)
         return target_data_array
 
+    
 if __name__ == "__main__":
     file_path = "/home/qdata/project/qlib/custom/data/aug/test_all_timeidx.pkl"
     check_time_ser_data(file_path)

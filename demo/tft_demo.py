@@ -3,6 +3,9 @@ from examples.utils import fix_pythonpath_if_working_locally
 import numpy as np
 import pandas as pd
 import torch
+import pytorch_lightning as pl
+from sklearn.preprocessing import MinMaxScaler
+
 from tqdm import tqdm_notebook as tqdm
 import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import CosineAnnealingLR,CosineAnnealingWarmRestarts,StepLR
@@ -25,6 +28,7 @@ logging.disable(logging.CRITICAL)
 
 from demo.cus_utils.tensor_viz import TensorViz
 from demo.cus_utils.data_filter import DataFilter
+from demo.cus_utils.data.custom_model import TFTCusModel
 
 figsize = (9, 6)
 num_samples = 200
@@ -34,8 +38,8 @@ label_q_inner = f"{int(low_q * 100)}-{int(high_q * 100)}th percentiles"
 
 training_cutoff = 900
 transformer = Scaler()
-forecast_horizon = 10
-input_chunk_length = 15
+forecast_horizon = 5
+input_chunk_length = 25
 emb_size = 955
 value_cols = ['dayofweek','STD5', 'VSTD5', 'label','ori_label']
 past_columns = ['STD5', 'VSTD5','label']
@@ -76,6 +80,69 @@ def create_model(model_name=None,epochs=300):
     }    
     if model_name is None:
         my_model = TFTModel(
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=forecast_horizon,
+            hidden_size=64,
+            lstm_layers=1,
+            num_attention_heads=4,
+            dropout=0.1,
+            batch_size=4096,
+            n_epochs=epochs,
+            add_relative_index=False,
+            add_encoders=None,
+            categorical_embedding_sizes=categorical_embedding_sizes,
+            likelihood=QuantileRegression(
+                quantiles=quantiles
+            ),  # QuantileRegression is set per default
+            # loss_fn=MSELoss(),
+            random_state=42,
+            # model_name="tft",
+            log_tensorboard=True,
+            save_checkpoints=True,
+            work_dir="demo/darts_log",
+            lr_scheduler_cls=scheduler,
+            lr_scheduler_kwargs=scheduler_config,
+            optimizer_cls=optimizer_cls,
+            optimizer_kwargs={"lr": 1e-2},
+            pl_trainer_kwargs={"accelerator": "gpu", "devices": [0]}
+        )
+    else:
+        my_model = TFTModel.load_from_checkpoint(model_name,work_dir=work_dir)
+
+    return my_model
+
+def create_custom_model(model_name=None,epochs=300):
+    """创建自定义model"""
+    quantiles = [
+        0.01,
+        0.05,
+        0.1,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.75,
+        0.8,
+        0.85,
+        0.9,
+        0.95,
+        0.99,
+    ]
+    # 设置"day of week" 为动态离散变量
+    categorical_embedding_sizes = {"dayofweek": 5,"instrument": emb_size}
+    # 定义优化器
+    optimizer_cls = torch.optim.Adam
+    scheduler = CosineAnnealingLR
+    scheduler_config = {
+        "T_max": 5, 
+        "eta_min": 0,
+    }    
+    if model_name is None:
+        my_model = TFTCusModel(
             input_chunk_length=input_chunk_length,
             output_chunk_length=forecast_horizon,
             hidden_size=64,
@@ -344,7 +411,27 @@ def process():
         transformer=transformer,
     )
     
-  
+def process_custom_data():
+    # 取得自定义训练数据及测试数据
+    
+    low_data_path = "/home/qdata/project/qlib/custom/data/aug/test_high.npy"
+    high_data_path = "/home/qdata/project/qlib/custom/data/aug/test_low.npy"
+    numpy_data = np.concatenate((np.load(low_data_path),np.load(high_data_path)),axis=0)
+    
+    scaler = MinMaxScaler()
+    numpy_data[:,:,-1] = scaler.fit_transform(numpy_data[:,:,-1])
+    cutoff = int(numpy_data.shape[0] * 0.8)
+    train_numpy_data = numpy_data[:cutoff]
+    val_numpy_data = numpy_data[cutoff:]
+    
+    my_model = create_custom_model()
+    # trainer_params_copy = {'accelerator': 'gpu', 'gpus': None, 'auto_select_gpus': False, 
+    #                            'logger': pytorch_lightning.loggers.tensorboard.TensorBoardLogger, 'max_epochs': 300, 
+    #                            'check_val_every_n_epoch': 1, 'enable_checkpointing': True, 
+    #                            'callbacks': pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint,
+    #                            'devices': [0], 'precision': 64, 'enable_model_summary': True, 'enable_progress_bar': True}
+    # trainer = pl.Trainer(**trainer_params_copy)
+    my_model.fit(train_numpy_data,val_numpy_data,trainer=None,verbose=True)
 
 def drop_val_row(series):
     ser_len = series.end_time() - series.start_time()
@@ -454,7 +541,8 @@ def aug_data_view():
             
 if __name__ == "__main__":
     # process()
-    process_val()
+    process_custom_data()
+    # process_val()
     # filter_data()
     # filter_data_nor()
     # aug_data_view()
